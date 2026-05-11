@@ -1,4 +1,4 @@
-﻿FROM nginx:alpine3.23
+﻿FROM nginx:alpine3.23-slim
 LABEL maintainer="Ministere de la Communication Senegal"
 LABEL project="Intranet New Deal Technologique"
 RUN rm -rf /usr/share/nginx/html/*
