@@ -1,0 +1,94 @@
+name: CD – Scan / Deploy (prod)
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME:     ${{ secrets.DOCKERHUB_USERNAME }}/intranet-newdeal
+  CONTAINER_NAME: intranet-newdeal-prod
+
+jobs:
+
+  scan:
+    name: "Job 1 – Scan securite pre-deploiement"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code source
+        uses: actions/checkout@v4
+
+      - name: Connexion a Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull de l image depuis Docker Hub
+        run: docker pull ${{ env.IMAGE_NAME }}:dev-latest
+
+      - name: Installation de Trivy
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -qq
+          sudo apt-get install -y trivy
+
+      - name: Scan vulnerabilites image de production
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --exit-code 0 \
+            --format table \
+            --output trivy-prod-report.txt \
+            ${{ env.IMAGE_NAME }}:dev-latest
+          cat trivy-prod-report.txt
+
+      - name: Scan secrets code source
+        run: |
+          trivy fs \
+            --scanners secret \
+            --exit-code 1 \
+            --format table \
+            .
+
+      - name: Upload rapport securite prod
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prod-security-report
+          path: trivy-prod-report.txt
+          retention-days: 90
+
+  deploy:
+    name: "Job 2 – Deploiement sur runner prod port 80"
+    runs-on: runner_prod
+    needs: scan
+    environment:
+      name: production
+      url: http://intranet.communication.gouv.sn
+    steps:
+      - name: Connexion a Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull de l image Docker prod
+        run: docker pull ${{ env.IMAGE_NAME }}:dev-latest
+
+      - name: Arret du conteneur existant
+        run: |
+          docker stop ${{ env.CONTAINER_NAME }} 2>/dev/null || true
+          docker rm   ${{ env.CONTAINER_NAME }} 2>/dev/null || true
+
+      - name: Demarrage du conteneur port 80
+        run: |
+          docker run -d \
+            --name ${{ env.CONTAINER_NAME }} \
+            --restart always \
+            -p 80:80 \
+            ${{ env.IMAGE_NAME }}:dev-la
